@@ -462,8 +462,7 @@ class Trainer(object):
             def to_prune_or_not_to_prune():
               if self.get_num_updates() >= self.prune_start_step and \
                   (self.get_num_updates() - self.prune_start_step) % self.pruning_interval == 0 and \
-                  self.sparsity < self.target_sparsity:
-
+                  abs(self.sparsity - self.target_sparsity) > 1e-3:
                     return True
               return False
 
@@ -659,6 +658,9 @@ class Trainer(object):
 
         if self.args.fp16:
             metrics.log_scalar("loss_scale", self.optimizer.scaler.loss_scale, priority=700, round=0)
+
+        # Log pruning stuff
+        metrics.log_scalar("sparsity", self.sparsity, priority=0, round=3)
 
         metrics.log_stop_time("train_wall")
 
