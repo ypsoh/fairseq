@@ -319,7 +319,7 @@ class FairseqTask(object):
         )
 
     def train_step(
-        self, sample, model, criterion, optimizer, update_num, ignore_grad=False
+        self, sample, model, criterion, optimizer, update_num, ignore_grad=False, retain_graph=True
     ):
         """
         Do forward and backward, and return the loss as computed by *criterion*
@@ -348,7 +348,7 @@ class FairseqTask(object):
         if ignore_grad:
             loss *= 0
         with torch.autograd.profiler.record_function("backward"):
-            optimizer.backward(loss)
+            optimizer.backward(loss, retain_graph=retain_graph)
         return loss, sample_size, logging_output
 
     def valid_step(self, sample, model, criterion):

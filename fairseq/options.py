@@ -26,6 +26,7 @@ def get_training_parser(default_task="translation"):
     add_model_args(parser)
     add_optimization_args(parser)
     add_checkpoint_args(parser)
+    add_pruning_args(parser)
     return parser
 
 
@@ -666,3 +667,12 @@ def add_model_args(parser):
                        help='Model Architecture')
     # fmt: on
     return group
+
+def add_pruning_args(parser):
+    group = parser.add_argument_group("Pruning configuration")
+    group.add_argument('--target_sparsity', type=float, help='Target sparsity')
+    group.add_argument('--pruning_interval', type=int, help='Pruning interval')
+    group.add_argument('--num_pruning_steps', type=int,  help='Number of pruning steps')
+    group.add_argument('--prune_start_step', type=int,  help='Training step to start pruning')
+    group.add_argument('--prune_type', choices=["random", "magnitude"], help='Type of pruning')
+    group.add_argument('--prune_embedding', default=False, type=bool, help='Include embedding for pruning')

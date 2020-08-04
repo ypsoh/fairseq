@@ -21,6 +21,7 @@ from fairseq.file_io import PathManager
 from fairseq.logging import meters, metrics
 from fairseq.nan_detector import NanDetector
 from fairseq.optim import lr_scheduler
+from torch.nn.utils import prune
 
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,35 @@ class Trainer(object):
         self._warn_once = set()
         self._wrapped_criterion = None
         self._wrapped_model = None
+
+        # Pruning parameters
+        self.target_sparsity = args.target_sparsity
+        self.pruning_interval = args.pruning_interval
+        self.num_pruning_steps = args.num_pruning_steps
+        self.prune_start_step = args.prune_start_step
+        self.prune_type = args.prune_type
+        self.prune_embedding = args.prune_embedding
+        
+        _modules_to_prune = [
+            'k_proj',
+            'v_proj',
+            'q_proj',
+            'out_proj',
+            'fc1',
+            'fc2',
+            ]
+
+        if self.prune_embedding:
+            # Only including one suffices becuase embedding is tied as default
+            _modules_to_prune.append('output_projection')
+
+        self.modules_to_prune = []
+
+        for name, module in self._model.named_modules():
+            if name.split('.')[-1] in _modules_to_prune:
+                self.modules_to_prune.append(
+                    (module, 'weight')
+                )
 
         # TODO(myleott): support tpu
         if self.cuda and self.data_parallel_world_size > 1:
@@ -173,6 +203,16 @@ class Trainer(object):
             else:
                 self._wrapped_model = self._model
         return self._wrapped_model
+
+    @property
+    def sparsity(self):
+        num_elements = 0
+        z_elements = 0
+        for m, _ in self.modules_to_prune:
+            num_elements += float(m.weight.nelement())
+            z_elements += float(torch.sum(m.weight == 0))
+
+        return z_elements / num_elements
 
     @property
     def optimizer(self):
@@ -419,6 +459,40 @@ class Trainer(object):
                 else:
                     return contextlib.ExitStack()  # dummy contextmanager
 
+            def to_prune_or_not_to_prune():
+              if self.get_num_updates() >= self.prune_start_step and \
+                  (self.get_num_updates() - self.prune_start_step) % self.pruning_interval == 0 and \
+                  self.sparsity < self.target_sparsity:
+
+                    return True
+              return False
+
+            def get_pruning_amount(train_step):
+                n = self.num_pruning_steps
+                dt = self.pruning_interval
+                t_0 = self.prune_start_step
+                s_i = 0.
+                s_f = self.target_sparsity
+
+                s_t = s_f + (s_i - s_f) * (1 - (train_step-t_0)/(n*dt))**3
+                return s_t
+
+            # prune accordingly
+            if to_prune_or_not_to_prune():
+
+                # Determine how much to prune
+                target_sparsity = get_pruning_amount(self.get_num_updates())
+
+                pruning_amount = (target_sparsity - self.sparsity) / (1. - self.sparsity)
+                
+                prune.global_unstructured(self.modules_to_prune,
+                        pruning_method=prune.L1Unstructured if self.prune_type == 'magnitude' \
+                                else prune.RandomUnstructured,
+                        amount=pruning_amount)
+
+                logger.info("NOTE: Weights pruned, type: {}, amount: {}, sparsity: {}".format(
+                    self.prune_type, pruning_amount, self.sparsity))
+
             try:
                 with maybe_no_sync():
                     # forward and backward
@@ -429,8 +503,11 @@ class Trainer(object):
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
                         ignore_grad=is_dummy_batch,
+                        retain_graph=to_prune_or_not_to_prune() # retain_graph only when pruning
                     )
+
                     del loss
+
 
                 logging_outputs.append(logging_output)
                 sample_size += sample_size_i
