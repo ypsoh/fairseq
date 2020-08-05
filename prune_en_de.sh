@@ -36,7 +36,7 @@ python ./fairseq_cli/train.py \
   --dropout 0.3 --weight-decay 0.0001 \
   --criterion label_smoothed_cross_entropy --label-smoothing 0.1 \
   --max-tokens $BATCH_SIZE --max-update $NUM_TRAIN_STEPS \
-  --eval-bleu --no-epoch-checkpoints \
+  --eval-bleu --no-epoch-checkpoints --ddp-backend=no_c10d \
   --eval-bleu-args '{"beam": 5, "max_len_a": 1.2, "max_len_b": 10}' \
   --eval-bleu-detok moses \
   --eval-bleu-remove-bpe \
