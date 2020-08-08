@@ -421,37 +421,6 @@ class Trainer(object):
 
     @metrics.aggregate("train")
     def train_step(self, samples, raise_oom=False):
-        def to_prune_or_not_to_prune():
-          if self.get_num_updates() >= self.prune_start_step and \
-              (self.get_num_updates() - self.prune_start_step) % self.pruning_interval == 0 and \
-              abs(self.sparsity - self.target_sparsity) > 1e-3:
-                return True
-          return False
-
-        def get_pruning_amount(train_step):
-            n = self.num_pruning_steps
-            dt = self.pruning_interval
-            t_0 = self.prune_start_step
-            s_i = 0.
-            s_f = self.target_sparsity
-
-            s_t = s_f + (s_i - s_f) * (1 - (train_step-t_0)/(n*dt))**3
-            return s_t
-        if to_prune_or_not_to_prune():
-            # Determine how much to prune
-            target_sparsity = get_pruning_amount(self.get_num_updates())
-
-            pruning_amount = (target_sparsity - self.sparsity) / (1. - self.sparsity)
-            
-            prune.global_unstructured(
-                    self.get_modules_to_prune(),
-                    pruning_method=prune.RandomUnstructured,
-                    #pruning_method=prune.L1Unstructured if self.prune_type == 'magnitude' \
-                    #        else prune.RandomUnstructured,
-                            amount=0.1)
-            logger.info("NOTE: Weights pruned, type: {}, amount: {}, sparsity: {}".format(
-                self.prune_type, pruning_amount, self.sparsity))
-
         """Do forward, backward and parameter update."""
         if self._dummy_batch == "DUMMY":
             self._dummy_batch = samples[0]
@@ -494,6 +463,36 @@ class Trainer(object):
             try:
                 with maybe_no_sync():
                     # prune accordingly
+                    def to_prune_or_not_to_prune():
+                      if self.get_num_updates() >= self.prune_start_step and \
+                          (self.get_num_updates() - self.prune_start_step) % self.pruning_interval == 0 and \
+                          abs(self.sparsity - self.target_sparsity) > 1e-3:
+                            return True
+                      return False
+
+                    def get_pruning_amount(train_step):
+                        n = self.num_pruning_steps
+                        dt = self.pruning_interval
+                        t_0 = self.prune_start_step
+                        s_i = 0.
+                        s_f = self.target_sparsity
+
+                        s_t = s_f + (s_i - s_f) * (1 - (train_step-t_0)/(n*dt))**3
+                        return s_t
+                    if to_prune_or_not_to_prune():
+                        # Determine how much to prune
+                        target_sparsity = get_pruning_amount(self.get_num_updates())
+
+                        pruning_amount = (target_sparsity - self.sparsity) / (1. - self.sparsity)
+                        
+                        prune.global_unstructured(
+                                self.get_modules_to_prune(),
+                                pruning_method=prune.L1Unstructured if self.prune_type == 'magnitude' \
+                                        else prune.RandomUnstructured,
+                                        amount=pruning_amount)
+                        logger.info("NOTE: Weights pruned, type: {}, amount: {}, sparsity: {}".format(
+                            self.prune_type, pruning_amount, self.sparsity))
+
 
                     # forward and backward
                     loss, sample_size_i, logging_output = self.task.train_step(

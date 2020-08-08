@@ -21,5 +21,6 @@ python ./fairseq_cli/train.py \
   --eval-bleu-remove-bpe \
   --eval-bleu-print-samples \
   --best-checkpoint-metric bleu --maximize-best-checkpoint-metric \
-  --prune_start_step 10000 --target_sparsity 0.5 --pruning_interval 1000 \
-  --num_pruning_steps 30 --prune_type magnitude --max-update 50000 
+  --prune_start_step 10 --target_sparsity 0.5 \
+  --pruning_interval 10 --num_pruning_steps 29 \
+  --prune_type magnitude --max-update 500
