@@ -29,7 +29,7 @@ mkdir -p checkpoints/$EXP_NAME
 mkdir -p $LOG_DIR
 
 
-python ./fairseq_cli/train.py \
+CUDA_VISIBLE_DEVICES=0 python ./fairseq_cli/train.py \
   $DATA_DIR --arch transformer --share-decoder-input-output-embed \
   --optimizer adam --adam-betas '(0.9, 0.98)' --clip-norm 0.0 \
   --lr 5e-4 --lr-scheduler inverse_sqrt --warmup-updates 4000 \
@@ -45,5 +45,4 @@ python ./fairseq_cli/train.py \
   --target_sparsity $TARGET_SPARSITY --pruning_interval $PRUNE_INTERVAL \
   --prune_start_step $PRUNE_START_STEP --num_pruning_steps $NUM_PRUNING_STEPS \
   --prune_type $PRUNE_TYPE --log-format json --tensorboard-logdir $LOG_DIR \
-  --prune_embedding $PRUNE_EMBEDDING
-
+  --prune_embedding $PRUNE_EMBEDDING > $EXP_NAME.out

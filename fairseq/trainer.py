@@ -95,26 +95,6 @@ class Trainer(object):
         self.prune_type = args.prune_type
         self.prune_embedding = args.prune_embedding
         
-        _modules_to_prune = [
-            'k_proj',
-            'v_proj',
-            'q_proj',
-            'out_proj',
-            'fc1',
-            'fc2',
-            ]
-
-        if self.prune_embedding:
-            # Only including one suffices becuase embedding is tied as default
-            _modules_to_prune.append('output_projection')
-
-        self.modules_to_prune = []
-
-        for name, module in self._model.named_modules():
-            if name.split('.')[-1] in _modules_to_prune:
-                self.modules_to_prune.append(
-                    (module, 'weight')
-                )
 
         # TODO(myleott): support tpu
         if self.cuda and self.data_parallel_world_size > 1:
@@ -151,6 +131,26 @@ class Trainer(object):
         self._optimizer = None
         self._wrapped_criterion = None
         self._wrapped_model = None
+
+    def get_modules_to_prune(self):
+        _modules_to_prune = [
+                'out_proj',
+                'v_proj',
+                'k_proj',
+                'q_proj',
+                'fc1',
+                'fc2',
+                ]
+        if self.prune_embedding:
+            # Only including one suffices becuase embedding is tied as default
+            _modules_to_prune.append('embed_tokens')
+
+        modules_to_prune = []
+
+        for name, module in self._model.named_modules():
+            if name.split('.')[-1] in _modules_to_prune:
+                modules_to_prune.append((module, 'weight'))
+        return modules_to_prune
 
     @property
     def data_parallel_world_size(self):
@@ -208,7 +208,7 @@ class Trainer(object):
     def sparsity(self):
         num_elements = 0
         z_elements = 0
-        for m, _ in self.modules_to_prune:
+        for m, _ in self.get_modules_to_prune():
             num_elements += float(m.weight.nelement())
             z_elements += float(torch.sum(m.weight == 0))
 
@@ -421,6 +421,37 @@ class Trainer(object):
 
     @metrics.aggregate("train")
     def train_step(self, samples, raise_oom=False):
+        def to_prune_or_not_to_prune():
+          if self.get_num_updates() >= self.prune_start_step and \
+              (self.get_num_updates() - self.prune_start_step) % self.pruning_interval == 0 and \
+              abs(self.sparsity - self.target_sparsity) > 1e-3:
+                return True
+          return False
+
+        def get_pruning_amount(train_step):
+            n = self.num_pruning_steps
+            dt = self.pruning_interval
+            t_0 = self.prune_start_step
+            s_i = 0.
+            s_f = self.target_sparsity
+
+            s_t = s_f + (s_i - s_f) * (1 - (train_step-t_0)/(n*dt))**3
+            return s_t
+        if to_prune_or_not_to_prune():
+            # Determine how much to prune
+            target_sparsity = get_pruning_amount(self.get_num_updates())
+
+            pruning_amount = (target_sparsity - self.sparsity) / (1. - self.sparsity)
+            
+            prune.global_unstructured(
+                    self.get_modules_to_prune(),
+                    pruning_method=prune.RandomUnstructured,
+                    #pruning_method=prune.L1Unstructured if self.prune_type == 'magnitude' \
+                    #        else prune.RandomUnstructured,
+                            amount=0.1)
+            logger.info("NOTE: Weights pruned, type: {}, amount: {}, sparsity: {}".format(
+                self.prune_type, pruning_amount, self.sparsity))
+
         """Do forward, backward and parameter update."""
         if self._dummy_batch == "DUMMY":
             self._dummy_batch = samples[0]
@@ -459,41 +490,11 @@ class Trainer(object):
                 else:
                     return contextlib.ExitStack()  # dummy contextmanager
 
-            def to_prune_or_not_to_prune():
-              if self.get_num_updates() >= self.prune_start_step and \
-                  (self.get_num_updates() - self.prune_start_step) % self.pruning_interval == 0 and \
-                  abs(self.sparsity - self.target_sparsity) > 1e-3:
-                    return True
-              return False
-
-            def get_pruning_amount(train_step):
-                n = self.num_pruning_steps
-                dt = self.pruning_interval
-                t_0 = self.prune_start_step
-                s_i = 0.
-                s_f = self.target_sparsity
-
-                s_t = s_f + (s_i - s_f) * (1 - (train_step-t_0)/(n*dt))**3
-                return s_t
-
-            # prune accordingly
-            if to_prune_or_not_to_prune():
-
-                # Determine how much to prune
-                target_sparsity = get_pruning_amount(self.get_num_updates())
-
-                pruning_amount = (target_sparsity - self.sparsity) / (1. - self.sparsity)
-                
-                prune.global_unstructured(self.modules_to_prune,
-                        pruning_method=prune.L1Unstructured if self.prune_type == 'magnitude' \
-                                else prune.RandomUnstructured,
-                        amount=pruning_amount)
-
-                logger.info("NOTE: Weights pruned, type: {}, amount: {}, sparsity: {}".format(
-                    self.prune_type, pruning_amount, self.sparsity))
 
             try:
                 with maybe_no_sync():
+                    # prune accordingly
+
                     # forward and backward
                     loss, sample_size_i, logging_output = self.task.train_step(
                         sample=sample,
@@ -501,12 +502,10 @@ class Trainer(object):
                         criterion=self.criterion,
                         optimizer=self.optimizer,
                         update_num=self.get_num_updates(),
-                        ignore_grad=is_dummy_batch,
-                        retain_graph=to_prune_or_not_to_prune() # retain_graph only when pruning
+                        ignore_grad=is_dummy_batch
                     )
 
                     del loss
-
 
                 logging_outputs.append(logging_output)
                 sample_size += sample_size_i
@@ -531,6 +530,7 @@ class Trainer(object):
                         return None
                 else:
                     raise e
+
 
             if self.tpu and i < len(samples) - 1:
                 # tpu-comment: every XLA operation before marking step is

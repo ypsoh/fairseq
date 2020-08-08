@@ -138,6 +138,7 @@ class MultiheadAttention(nn.Module):
                 weights for each head. Implies *need_weights*. Default:
                 return the average attention weights over all heads.
         """
+
         if need_head_weights:
             need_weights = True
 
@@ -145,6 +146,7 @@ class MultiheadAttention(nn.Module):
         assert embed_dim == self.embed_dim
         assert list(query.size()) == [tgt_len, bsz, embed_dim]
 
+        """
         if (
             not self.onnx_trace
             and not self.tpu  # don't use PyTorch version on TPUs
@@ -155,6 +157,7 @@ class MultiheadAttention(nn.Module):
             and not torch.jit.is_scripting()
         ):
             assert key is not None and value is not None
+            from IPython import embed; embed()
             return F.multi_head_attention_forward(
                 query,
                 key,
@@ -178,6 +181,7 @@ class MultiheadAttention(nn.Module):
                 k_proj_weight=self.k_proj.weight,
                 v_proj_weight=self.v_proj.weight,
             )
+        """
 
         if incremental_state is not None:
             saved_state = self._get_input_buffer(incremental_state)
